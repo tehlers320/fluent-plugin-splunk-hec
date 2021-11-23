@@ -143,6 +143,7 @@ module Fluent::Plugin
 
     def configure(conf)
       super
+      @hec_api_raw = construct_raw_api
       @hec_api_ack = construct_ack_api
       check_metric_configs
       pick_custom_format_method
@@ -183,7 +184,7 @@ module Fluent::Plugin
     def multi_workers_ready?
       true
     end
-    
+
 
     protected
 
@@ -289,7 +290,13 @@ module Fluent::Plugin
     end
 
     def construct_api
-      URI("#{@protocol}://#{@hec_host}:#{@hec_port}/services/collector")
+      URI("#{@protocol}://#{@hec_host}:#{@hec_port}/services/collector/raw")
+    rescue StandardError
+      raise Fluent::ConfigError, "hec_host (#{@hec_host}) and/or hec_port (#{@hec_port}) are invalid."
+    end
+
+    def construct_raw_api
+      URI("#{@protocol}://#{@hec_host}:#{@hec_port}/services/collector/raw")
     rescue StandardError
       raise Fluent::ConfigError, "hec_host (#{@hec_host}) and/or hec_port (#{@hec_port}) are invalid."
     end
@@ -314,6 +321,7 @@ module Fluent::Plugin
         c.open_timeout = @open_timeout
         c.min_version = OpenSSL::SSL::TLS1_1_VERSION if @require_ssl_min_version
 
+        c.override_headers['Content-Encoding'] = 'gzip'
         c.override_headers['Content-Type'] = 'application/json'
         c.override_headers['User-Agent'] = "fluent-plugin-splunk_hec_out/#{VERSION}"
         c.override_headers['Authorization'] = "Splunk #{@hec_token}"
@@ -325,7 +333,12 @@ module Fluent::Plugin
 
     def write_to_splunk(chunk)
       post = Net::HTTP::Post.new @api.request_uri
-      post.body = chunk.read
+      #      post.body = chunk.read
+      log.debug { "precompress size: #{chunk.read.bytesize}" }
+      sio = StringIO.new
+      gz = Zlib::GzipWriter.new(sio, 3)
+      gz << chunk.read
+      post.body = gz.close.string
       log.debug { "[Sending] Chunk: #{dump_unique_id_hex(chunk.unique_id)}(#{post.body.bytesize}B)." }
       log.trace { "POST #{@api} body=#{post.body}" }
 
@@ -344,7 +357,7 @@ module Fluent::Plugin
         log.debug { "Failed request body: #{post.body}" }
       end
 
-      log.debug { "[Response] Chunk: #{dump_unique_id_hex(chunk.unique_id)} Size: #{post.body.bytesize} Response: #{response.inspect} Duration: #{t2 - t1}" }
+      log.debug { "[Response] Chunk: #{dump_unique_id_hex(chunk.unique_id)} Size: #{post.body.bytesize}  Response: #{response.inspect} Duration: #{t2 - t1}" }
       process_response(response, post.body)
       # example response body {"text":"Success","code":0,"ackId":6}
       return MultiJson.load(response.body).fetch('ackId', nil)
