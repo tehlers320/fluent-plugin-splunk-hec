@@ -143,7 +143,6 @@ module Fluent::Plugin
 
     def configure(conf)
       super
-      @hec_api_raw = construct_raw_api
       @hec_api_ack = construct_ack_api
       check_metric_configs
       pick_custom_format_method
@@ -162,6 +161,7 @@ module Fluent::Plugin
         c.proxy   = :ENV
         c.min_version = OpenSSL::SSL::TLS1_1_VERSION if @require_ssl_min_version
 
+        c.override_headers['Content-Encoding'] = 'gzip'
         c.override_headers['Content-Type'] = 'application/json'
         c.override_headers['User-Agent'] = "fluent-plugin-splunk_hec_out/#{VERSION}"
         c.override_headers['Authorization'] = "Splunk #{@hec_token}"
@@ -290,13 +290,7 @@ module Fluent::Plugin
     end
 
     def construct_api
-      URI("#{@protocol}://#{@hec_host}:#{@hec_port}/services/collector/raw")
-    rescue StandardError
-      raise Fluent::ConfigError, "hec_host (#{@hec_host}) and/or hec_port (#{@hec_port}) are invalid."
-    end
-
-    def construct_raw_api
-      URI("#{@protocol}://#{@hec_host}:#{@hec_port}/services/collector/raw")
+      URI("#{@protocol}://#{@hec_host}:#{@hec_port}/services/collector")
     rescue StandardError
       raise Fluent::ConfigError, "hec_host (#{@hec_host}) and/or hec_port (#{@hec_port}) are invalid."
     end
@@ -321,18 +315,19 @@ module Fluent::Plugin
         c.open_timeout = @open_timeout
         c.min_version = OpenSSL::SSL::TLS1_1_VERSION if @require_ssl_min_version
 
-        c.override_headers['Content-Encoding'] = 'gzip'
         c.override_headers['Content-Type'] = 'application/json'
         c.override_headers['User-Agent'] = "fluent-plugin-splunk_hec_out/#{VERSION}"
         c.override_headers['Authorization'] = "Splunk #{@hec_token}"
         c.override_headers['__splunk_app_name'] = @app_name.to_s
         c.override_headers['__splunk_app_version'] = @app_version.to_s
+        c.override_headers['X-Splunk-Request-Channel'] = @hec_channel if @hec_ack_enabled
 
       end
     end
 
     def write_to_splunk(chunk)
       post = Net::HTTP::Post.new @api.request_uri
+
       #      post.body = chunk.read
       log.debug { "precompress size: #{chunk.read.bytesize}" }
       sio = StringIO.new
@@ -482,7 +477,8 @@ module Fluent::Plugin
 
       post = Net::HTTP::Post.new @hec_api_ack.request_uri
       post.body = MultiJson.dump({ 'acks' => ack_ids })
-      response = @conn.request @hec_api_ack.to_s, post
+      connection = new_connection
+      response = connection.request @hec_api_ack.to_s, post
       log.debug { "[Response] POST #{@hec_api_ack}: #{response.inspect}" }
       log.debug { "Sending #{post.body.bytesize} bytes to Splunk." }
       log.trace { "POST #{@hec_api_ack} body=#{get.body}" }
