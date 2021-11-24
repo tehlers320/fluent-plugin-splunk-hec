@@ -413,8 +413,6 @@ module Fluent::Plugin
           end
           ## remove anything with no ack
           ack_ids_to_check = ack_ids_to_check.compact
-          ## ensure we dont double ack
-          ack_ids_to_check = ack_ids_to_check.uniq
           saved_time = Fluent::Clock.now
           log.debug { "checking ack_ids: #{ack_ids_to_check}" }
           successful_ack_ids = get_successful_ack_ids(ack_ids_to_check)
